@@ -84,6 +84,38 @@ const themeDefinitions = [
     },
   },
   {
+    id: 'cyberpunk',
+    name: 'Cyberpunk',
+    colors: {
+      '--bg-primary': '#0f0f0f',
+      '--bg-secondary': '#1a1a1a',
+      '--text-primary': '#00ff9f',
+      '--text-secondary': '#ff0080',
+      '--accent': '#ff0080',
+      '--success': '#00ff9f',
+      '--error': '#ff3030',
+      '--border': '#333333',
+      '--shadow': '0 0 20px rgba(255, 0, 128, 0.3)',
+      '--code-bg': '#1a1a1a',
+    },
+  },
+  {
+    id: 'ocean',
+    name: 'Ocean',
+    colors: {
+      '--bg-primary': '#0f1419',
+      '--bg-secondary': '#1e2328',
+      '--text-primary': '#e6e1cf',
+      '--text-secondary': '#5c6773',
+      '--accent': '#39bae6',
+      '--success': '#7fd962',
+      '--error': '#f07178',
+      '--border': '#2d3640',
+      '--shadow': '0 4px 6px -1px rgba(0, 0, 0, 0.6)',
+      '--code-bg': '#1e2328',
+    },
+  },
+  {
     id: 'gruvbox',
     name: 'Gruvbox',
     colors: {

@@ -1,12 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTheme } from '../contexts/ThemeContext'
 import { usePoints } from '../contexts/PointsContext'
-import { snippetsLibrary } from '../data/snippets'
+import { useAuth } from '../contexts/AuthContext'
+import { getRandomSnippet } from '../services/snippetService'
 import StatsModal from './StatsModal'
+import AdvancedAnalytics from './AdvancedAnalytics'
+import Settings from './Settings'
 
-export default function MainTypingScreen({ settings, onSettingsChange, onComplete }) {
+export default function MainTypingScreen({ settings, onSettingsChange, onComplete, onNavigateToAuth }) {
   const { themes, currentTheme, setTheme } = useTheme()
   const { totalPoints, level, progressToNextLevel } = usePoints()
+  const { currentUser, logout } = useAuth()
   const [currentSnippet, setCurrentSnippet] = useState(null)
   const [userInput, setUserInput] = useState('')
   const [isTyping, setIsTyping] = useState(false)
@@ -14,6 +18,9 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
   const [timeLeft, setTimeLeft] = useState(settings.duration)
   const [charStats, setCharStats] = useState([]) // Track each character's correctness
   const [showStats, setShowStats] = useState(false)
+  const [showUserMenu, setShowUserMenu] = useState(false)
+  const [showAdvancedAnalytics, setShowAdvancedAnalytics] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   
   const inputRef = useRef(null)
   const timerRef = useRef(null)
@@ -39,12 +46,25 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
       // Escape to reset
       if (e.key === 'Escape') {
         loadNewSnippet()
+        setShowUserMenu(false)
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
+
+  // Close user menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (showUserMenu && !e.target.closest('.user-menu-container')) {
+        setShowUserMenu(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showUserMenu])
 
   // Timer logic
   useEffect(() => {
@@ -66,11 +86,13 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
   }, [isTyping, timeLeft])
 
   const loadNewSnippet = () => {
-    const snippets = snippetsLibrary[settings.language]?.[settings.difficulty] || []
-    if (snippets.length > 0) {
-      const randomSnippet = snippets[Math.floor(Math.random() * snippets.length)]
-      setCurrentSnippet(randomSnippet)
+    try {
+      const snippet = getRandomSnippet(settings.language, settings.difficulty)
+      setCurrentSnippet(snippet)
       resetSession()
+    } catch (error) {
+      console.error('Error loading snippet:', error)
+      alert('Failed to load snippet. Please try again.')
     }
   }
 
@@ -85,6 +107,9 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
 
   const handleInputChange = (e) => {
     const value = e.target.value
+    
+    // Check if snippet is loaded
+    if (!currentSnippet) return
     
     // Start timer on first keystroke
     if (!isTyping && value.length > 0) {
@@ -118,31 +143,61 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
     }
   }
 
-  const handleComplete = () => {
-    setIsTyping(false)
-    clearInterval(timerRef.current)
-    
+  const calculateStats = () => {
     const timeElapsed = startTime ? Math.max((Date.now() - startTime) / 1000, 1) : settings.duration
-    const correctChars = charStats.filter(c => c.correct).length
-    const incorrectChars = charStats.filter(c => !c.correct).length
+    const correctChars = charStats.filter(char => char.correct).length
+    const incorrectChars = charStats.length - correctChars
     const totalChars = charStats.length
     const accuracy = totalChars > 0 ? Math.round((correctChars / totalChars) * 100) : 0
-    const wpm = totalChars > 0 ? Math.round((correctChars / 5) / (timeElapsed / 60)) : 0
-    
-    onComplete({
+    const wpm = Math.round((correctChars / 5) / (timeElapsed / 60))
+
+    return {
       correctChars,
       incorrectChars,
       totalChars,
       accuracy,
       wpm,
       timeElapsed,
-      targetText: currentSnippet.code,
+      targetText: currentSnippet?.code || '',
       userInput,
       charStats,
-      completed: userInput.length === currentSnippet.code.length,
+      completed: userInput.length === (currentSnippet?.code.length || 0),
       timeLeft,
       originalDuration: settings.duration
-    })
+    }
+  }
+
+  const handleComplete = () => {
+    if (!isTyping) return
+    
+    setIsTyping(false)
+    clearInterval(timerRef.current)
+    
+    // No premium restrictions - all users can take unlimited tests
+    
+    const results = calculateStats()
+    
+    // Save test data for analytics
+    const testData = {
+      id: Date.now(),
+      timestamp: new Date().toISOString(),
+      ...results,
+      language: settings.language,
+      difficulty: settings.difficulty
+    }
+    
+    // Store in test history for analytics
+    const existingHistory = JSON.parse(localStorage.getItem('codetype_test_history') || '[]')
+    existingHistory.push(testData)
+    
+    // Keep only last 100 tests
+    if (existingHistory.length > 100) {
+      existingHistory.splice(0, existingHistory.length - 100)
+    }
+    
+    localStorage.setItem('codetype_test_history', JSON.stringify(existingHistory))
+    
+    onComplete(results)
   }
 
   const handleSettingChange = (key, value) => {
@@ -174,14 +229,25 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
   }
 
   if (!currentSnippet) {
-    return <div className="min-h-screen flex items-center justify-center">Loading...</div>
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 mx-auto mb-4" 
+               style={{ borderColor: 'var(--accent)' }}></div>
+          <p style={{ color: 'var(--text-secondary)' }}>
+            Loading snippet...
+          </p>
+        </div>
+      </div>
+    )
   }
 
   return (
     <div className="min-h-screen flex flex-col">
       
-      {/* Top Settings Bar - Monkeytype style */}
-      <div className="flex items-center justify-between px-8 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
+      {/* Top Settings Bar - Hide when typing */}
+      {!isTyping && (
+        <div className="flex items-center justify-between px-8 py-4 border-b transition-all duration-300" style={{ borderColor: 'var(--border)' }}>
         
         {/* Left: Points & Level Display */}
         <div className="flex items-center space-x-6">
@@ -195,7 +261,9 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
               {level}
             </div>
             <div className="flex flex-col">
-              <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Level {level}</span>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>Level {level}</span>
+              </div>
               <span className="text-sm font-semibold" style={{ color: 'var(--accent)' }}>{totalPoints} XP</span>
             </div>
           </button>
@@ -287,19 +355,128 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
           >
             ↻
           </button>
+
+          {/* Advanced Analytics Button */}
+          <button
+            onClick={() => setShowAdvancedAnalytics(true)}
+            className="flex items-center justify-center w-10 h-10 rounded-lg border hover:bg-opacity-10 transition-all"
+            style={{ borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+            title="Advanced Analytics"
+          >
+            📊
+          </button>
+
+          {/* Settings Button */}
+          <button
+            onClick={() => setShowSettings(true)}
+            className="flex items-center justify-center w-10 h-10 rounded-lg border hover:bg-opacity-10 transition-all"
+            style={{ borderColor: 'var(--border)', color: 'var(--text-primary)' }}
+            title="Settings"
+          >
+            ⚙️
+          </button>
+
+          {/* User Profile Button */}
+          <div className="relative user-menu-container">
+            <button
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              className="flex items-center justify-center w-10 h-10 rounded-full border hover:bg-opacity-10 transition-all"
+              style={{ borderColor: 'var(--border)', color: 'var(--text-primary)', backgroundColor: 'var(--accent)' }}
+              title={currentUser ? currentUser.username : 'Guest'}
+            >
+              <span className="text-white font-semibold">
+                {currentUser ? currentUser.username.charAt(0).toUpperCase() : '?'}
+              </span>
+            </button>
+
+            {/* User Dropdown Menu */}
+            {showUserMenu && (
+              <div className="absolute right-0 mt-2 w-48 rounded-lg border shadow-lg z-50"
+                   style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }}>
+                <div className="p-3 border-b" style={{ borderColor: 'var(--border)' }}>
+                  <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    {currentUser ? currentUser.username : 'Guest'}
+                  </p>
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                    {currentUser ? currentUser.email : 'Not signed in'}
+                  </p>
+                </div>
+                
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false)
+                    setShowSettings(true)
+                  }}
+                  className="w-full text-left px-3 py-2 hover:bg-opacity-10 transition-all"
+                  style={{ color: 'var(--text-primary)' }}
+                >
+                  ⚙️ Settings
+                </button>
+                
+                {currentUser ? (
+                  <button
+                    onClick={() => {
+                      logout()
+                      setShowUserMenu(false)
+                      window.location.reload()
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-opacity-10 transition-all"
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    Sign Out
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => {
+                        setShowUserMenu(false)
+                        onNavigateToAuth?.('login')
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-opacity-10 transition-all"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      Sign In
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowUserMenu(false)
+                        onNavigateToAuth?.('signup')
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-opacity-10 transition-all"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      Sign Up
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+        </div>
+      )}
+
+      {/* Timer Display - Show when typing */}
+      {isTyping && (
+        <div className="fixed top-4 right-4 z-50">
+          <div className={`text-2xl font-mono font-bold px-4 py-2 rounded-lg ${timeLeft <= 10 ? 'text-red-500 bg-red-100' : 'text-white bg-gray-800'}`}>
+            {formatTime(timeLeft)}
+          </div>
+        </div>
+      )}
 
       {/* Main Typing Area - Centered like Monkeytype */}
       <div className="flex-1 flex items-center justify-center px-8 py-12">
         <div className="w-full max-w-4xl">
           
           {/* Snippet Info */}
-          <div className="text-center mb-6">
-            <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-              {currentSnippet.description}
-            </p>
-          </div>
+          {currentSnippet && (
+            <div className="text-center mb-6">
+              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                {currentSnippet.description}
+              </p>
+            </div>
+          )}
 
           {/* Code Display with Overlay Input */}
           <div className="relative">
@@ -311,7 +488,10 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
               }}
               onClick={() => inputRef.current?.focus()}
             >
-              {currentSnippet.code.split('').map((char, index) => renderCharacter(char, index))}
+              {currentSnippet ? 
+                currentSnippet.code.split('').map((char, index) => renderCharacter(char, index)) :
+                <div className="text-gray-500">Loading snippet...</div>
+              }
             </div>
 
             {/* Hidden Input - Auto-focus */}
@@ -330,24 +510,26 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
           </div>
 
           {/* Progress Indicator */}
-          <div className="mt-6">
-            <div className="w-full h-1 rounded-full" style={{ backgroundColor: 'var(--border)' }}>
-              <div 
-                className="h-full rounded-full transition-all duration-200"
-                style={{ 
-                  backgroundColor: 'var(--accent)',
-                  width: `${Math.min((userInput.length / currentSnippet.code.length) * 100, 100)}%`
-                }}
-              />
+          {currentSnippet && (
+            <div className="mt-6">
+              <div className="w-full h-1 rounded-full" style={{ backgroundColor: 'var(--border)' }}>
+                <div 
+                  className="h-full rounded-full transition-all duration-200"
+                  style={{ 
+                    backgroundColor: 'var(--accent)',
+                    width: `${Math.min((userInput.length / currentSnippet.code.length) * 100, 100)}%`
+                  }}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Live Stats (only show when typing) */}
-          {isTyping && (
+          {isTyping && currentSnippet && (
             <div className="mt-8 flex justify-center space-x-8 text-sm" style={{ color: 'var(--text-secondary)' }}>
               <div>
                 <span className="font-semibold" style={{ color: 'var(--accent)' }}>
-                  {Math.round((charStats.filter(c => c.correct).length / 5) / ((Date.now() - startTime) / 1000 / 60))}
+                  {Math.round((charStats.filter(c => c.correct).length / 5) / ((Date.now() - startTime) / 1000 / 60)) || 0}
                 </span> wpm
               </div>
               <div>
@@ -373,8 +555,23 @@ export default function MainTypingScreen({ settings, onSettingsChange, onComplet
         </div>
       </div>
 
+
       {/* Stats Modal */}
       <StatsModal isOpen={showStats} onClose={() => setShowStats(false)} />
+      
+      {/* Advanced Analytics Modal */}
+      {showAdvancedAnalytics && (
+        <AdvancedAnalytics
+          onClose={() => setShowAdvancedAnalytics(false)}
+        />
+      )}
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <Settings
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   )
 }
