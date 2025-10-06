@@ -4,7 +4,7 @@ import { usePoints } from '../contexts/PointsContext'
 
 export default function AdvancedAnalytics({ onClose }) {
   const { stats } = usePoints()
-  const [selectedTimeframe, setSelectedTimeframe] = useState('week')
+  const [selectedTimeframe, setSelectedTimeframe] = useState('today')
   const [selectedMetric, setSelectedMetric] = useState('wpm')
 
   // All users now have access to advanced analytics
@@ -53,23 +53,30 @@ export default function AdvancedAnalytics({ onClose }) {
   // Filter sessions by timeframe
   const filteredSessions = useMemo(() => {
     const now = new Date()
-    let cutoffDate
     
     switch (selectedTimeframe) {
-      case 'day':
-        cutoffDate = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-        break
-      case 'week':
-        cutoffDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-        break
-      case 'month':
-        cutoffDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
-        break
+      case 'today': {
+        // Get sessions from today (since midnight)
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0)
+        return realSessions.filter(session => new Date(session.date) >= todayStart)
+      }
+      case 'yesterday': {
+        // Get sessions from yesterday only
+        const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 0, 0, 0)
+        const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0)
+        return realSessions.filter(session => {
+          const sessionDate = new Date(session.date)
+          return sessionDate >= yesterdayStart && sessionDate < yesterdayEnd
+        })
+      }
+      case 'week': {
+        // Get sessions from the last 7 days (including today)
+        const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6, 0, 0, 0)
+        return realSessions.filter(session => new Date(session.date) >= weekStart)
+      }
       default:
         return realSessions
     }
-    
-    return realSessions.filter(session => new Date(session.date) >= cutoffDate)
   }, [realSessions, selectedTimeframe])
 
   // Calculate analytics
@@ -152,17 +159,21 @@ export default function AdvancedAnalytics({ onClose }) {
           
           {/* Timeframe Selector */}
           <div className="flex space-x-2 mt-4">
-            {['day', 'week', 'month', 'all'].map(timeframe => (
+            {[
+              { value: 'today', label: 'Today' },
+              { value: 'yesterday', label: 'Yesterday' },
+              { value: 'week', label: 'This Week' }
+            ].map(({ value, label }) => (
               <button
-                key={timeframe}
-                onClick={() => setSelectedTimeframe(timeframe)}
+                key={value}
+                onClick={() => setSelectedTimeframe(value)}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  selectedTimeframe === timeframe
+                  selectedTimeframe === value
                     ? 'bg-blue-500 text-white'
                     : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                 }`}
               >
-                {timeframe === 'all' ? 'All Time' : `Last ${timeframe}`}
+                {label}
               </button>
             ))}
           </div>

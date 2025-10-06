@@ -1,10 +1,11 @@
 import { motion } from 'framer-motion'
 import { usePoints } from '../contexts/PointsContext'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 export default function AnalysisScreen({ results, settings, onRestart }) {
   const { addPoints, totalPoints, level } = usePoints()
   const [pointsData, setPointsData] = useState(null)
+  const pointsAddedRef = useRef(false)
   
   // Safety check
   if (!results) {
@@ -63,11 +64,12 @@ export default function AnalysisScreen({ results, settings, onRestart }) {
 
   // Add points when component mounts (only once)
   useEffect(() => {
-    if (results && !pointsData) {
+    if (results && !pointsAddedRef.current) {
+      pointsAddedRef.current = true
       const data = addPoints(results)
       setPointsData(data)
     }
-  }, [results, pointsData, addPoints])
+  }, [results, addPoints])
 
   // Performance rating
   const getPerformanceRating = () => {

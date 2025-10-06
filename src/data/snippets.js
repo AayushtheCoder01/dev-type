@@ -81,7 +81,7 @@ const arr2 = [...arr1, 4, 5]`
         id: 'js-e-10',
         language: 'javascript',
         difficulty: 'easy',
-        description: 'Array find',
+        description: 'Array find',  
         code: `const users = [{id: 1, name: 'John'}, {id: 2, name: 'Jane'}]
 const user = users.find(u => u.id === 2)`
       },

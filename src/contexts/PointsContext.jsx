@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useEffect, useRef } from 'react'
+import { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from './AuthContext'
+import { saveTestResult, getUserStats, updateUserStats, unlockAchievement } from '../lib/supabaseHelpers'
 
 const PointsContext = createContext()
 
@@ -42,8 +43,6 @@ const calculatePoints = (results) => {
 
 // Level calculation (similar to Duolingo)
 const calculateLevel = (totalPoints) => {
-  // Each level requires more points (exponential growth)
-  // Level 1: 0-100, Level 2: 100-250, Level 3: 250-450, etc.
   const level = Math.floor(Math.sqrt(totalPoints / 50)) + 1
   return level
 }
@@ -53,7 +52,7 @@ const getPointsForNextLevel = (currentLevel) => {
 }
 
 export const PointsProvider = ({ children }) => {
-  const { currentUser, updateUserStats } = useAuth()
+  const { currentUser, updateUserStats: updateAuthUserStats } = useAuth()
   const [totalPoints, setTotalPoints] = useState(0)
   const [stats, setStats] = useState({
     totalRaces: 0,
@@ -67,139 +66,97 @@ export const PointsProvider = ({ children }) => {
     achievements: []
   })
   
-  // Track the last loaded user ID to prevent unnecessary reloads
   const lastLoadedUserId = useRef(null)
 
-  // Load data from localStorage on mount or when user ID changes
+  // Load data from Supabase or localStorage
   useEffect(() => {
-    const userId = currentUser?.id || 'guest'
-    
-    // Only reload if the user ID actually changed
-    if (lastLoadedUserId.current === userId) {
-      return
-    }
-    
-    lastLoadedUserId.current = userId
-    
-    if (currentUser) {
-      // Load user-specific data
-      const userPointsKey = `${POINTS_STORAGE_KEY}_${currentUser.id}`
-      const userStatsKey = `${STATS_STORAGE_KEY}_${currentUser.id}`
-      
-      const savedPoints = localStorage.getItem(userPointsKey)
-      const savedStats = localStorage.getItem(userStatsKey)
-      
-      console.log('Loading user data:', { userId: currentUser.id, savedPoints, savedStats })
-      
-      if (savedPoints) {
-        setTotalPoints(parseInt(savedPoints))
-      } else {
-        setTotalPoints(0)
-      }
-      
-      if (savedStats) {
-        setStats(JSON.parse(savedStats))
-      } else {
-        setStats({
-          totalRaces: 0,
-          totalWords: 0,
-          totalTime: 0,
-          bestWPM: 0,
-          bestAccuracy: 0,
-          perfectRaces: 0,
-          streak: 0,
-          lastRaceDate: null,
-          achievements: []
-        })
-      }
-    } else {
-      // Load guest data
-      const savedPoints = localStorage.getItem(POINTS_STORAGE_KEY)
-      const savedStats = localStorage.getItem(STATS_STORAGE_KEY)
-      
-      console.log('Loading guest data:', { savedPoints, savedStats })
-      
-      if (savedPoints) {
-        setTotalPoints(parseInt(savedPoints))
-      } else {
-        setTotalPoints(0)
-      }
-      
-      if (savedStats) {
-        setStats(JSON.parse(savedStats))
-      } else {
-        setStats({
-          totalRaces: 0,
-          totalWords: 0,
-          totalTime: 0,
-          bestWPM: 0,
-          bestAccuracy: 0,
-          perfectRaces: 0,
-          streak: 0,
-          lastRaceDate: null,
-          achievements: []
-        })
-      }
-    }
-  }, [currentUser?.id])
+    const loadData = async () => {
+      if (currentUser) {
+        // Only reload if user changed
+        if (lastLoadedUserId.current === currentUser.id) return
+        lastLoadedUserId.current = currentUser.id
 
-  // Save to localStorage whenever data changes
-  useEffect(() => {
-    if (currentUser) {
-      const userPointsKey = `${POINTS_STORAGE_KEY}_${currentUser.id}`
-      localStorage.setItem(userPointsKey, totalPoints.toString())
-      console.log('Saved user points:', { key: userPointsKey, points: totalPoints })
-      
-      // Also update user stats in auth context (debounced to prevent loops)
-      const timeoutId = setTimeout(() => {
-        if (currentUser.xp !== totalPoints) {
-          console.log('Updating auth context XP:', { old: currentUser.xp, new: totalPoints })
-          updateUserStats({ xp: totalPoints })
+        try {
+          // Load from Supabase
+          const userStats = await getUserStats(currentUser.id)
+          
+          setTotalPoints(currentUser.xp || 0)
+          setStats({
+            totalRaces: userStats.total_races || 0,
+            totalWords: userStats.total_words || 0,
+            totalTime: userStats.total_time || 0,
+            bestWPM: currentUser.bestWpm || 0,
+            bestAccuracy: currentUser.bestAccuracy || 0,
+            perfectRaces: userStats.perfect_races || 0,
+            streak: currentUser.currentStreak || 0,
+            lastRaceDate: userStats.last_race_date || null,
+            achievements: []
+          })
+        } catch (error) {
+          console.error('Error loading user stats:', error)
+          // Fallback to default stats
+          setTotalPoints(0)
+          setStats({
+            totalRaces: 0,
+            totalWords: 0,
+            totalTime: 0,
+            bestWPM: 0,
+            bestAccuracy: 0,
+            perfectRaces: 0,
+            streak: 0,
+            lastRaceDate: null,
+            achievements: []
+          })
         }
-      }, 0)
-      
-      return () => clearTimeout(timeoutId)
-    } else {
-      localStorage.setItem(POINTS_STORAGE_KEY, totalPoints.toString())
-      console.log('Saved guest points:', totalPoints)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [totalPoints, currentUser?.id])
-
-  useEffect(() => {
-    if (currentUser) {
-      const userStatsKey = `${STATS_STORAGE_KEY}_${currentUser.id}`
-      localStorage.setItem(userStatsKey, JSON.stringify(stats))
-      
-      // Also update user stats in auth context (debounced to prevent loops)
-      const timeoutId = setTimeout(() => {
-        const newStats = {
-          totalSessions: stats.totalRaces,
-          totalTime: stats.totalTime,
-          avgWpm: stats.bestWPM,
-          avgAccuracy: stats.bestAccuracy,
-          favoriteLanguage: null,
-          languagesPracticed: []
+      } else {
+        // Load guest data from localStorage
+        lastLoadedUserId.current = null
+        const savedPoints = localStorage.getItem(POINTS_STORAGE_KEY)
+        const savedStats = localStorage.getItem(STATS_STORAGE_KEY)
+        
+        if (savedPoints) {
+          setTotalPoints(parseInt(savedPoints))
+        } else {
+          setTotalPoints(0)
         }
         
-        // Only update if stats actually changed
-        if (JSON.stringify(currentUser.stats) !== JSON.stringify(newStats)) {
-          updateUserStats({ stats: newStats })
+        if (savedStats) {
+          setStats(JSON.parse(savedStats))
+        } else {
+          setStats({
+            totalRaces: 0,
+            totalWords: 0,
+            totalTime: 0,
+            bestWPM: 0,
+            bestAccuracy: 0,
+            perfectRaces: 0,
+            streak: 0,
+            lastRaceDate: null,
+            achievements: []
+          })
         }
-      }, 0)
-      
-      return () => clearTimeout(timeoutId)
-    } else {
+      }
+    }
+
+    loadData()
+  }, [currentUser?.id])
+
+  // Save to localStorage for guest users
+  useEffect(() => {
+    if (!currentUser) {
+      localStorage.setItem(POINTS_STORAGE_KEY, totalPoints.toString())
+    }
+  }, [totalPoints, currentUser])
+
+  useEffect(() => {
+    if (!currentUser) {
       localStorage.setItem(STATS_STORAGE_KEY, JSON.stringify(stats))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stats, currentUser?.id])
+  }, [stats, currentUser])
 
-  const addPoints = (results) => {
+  const addPoints = useCallback(async (results) => {
     const earnedPoints = calculatePoints(results)
-    const newTotalPoints = totalPoints + earnedPoints
     
-    // Update stats
     const today = new Date().toDateString()
     const isNewDay = stats.lastRaceDate !== today
     
@@ -215,22 +172,93 @@ export const PointsProvider = ({ children }) => {
       achievements: stats.achievements
     }
     
+    const newTotalPoints = totalPoints + earnedPoints
+    const newLevel = calculateLevel(newTotalPoints)
+    
     // Check for achievements
     const newAchievements = checkAchievements(newStats, stats)
     if (newAchievements.length > 0) {
       newStats.achievements = [...stats.achievements, ...newAchievements]
     }
     
+    // Update local state
     setTotalPoints(newTotalPoints)
     setStats(newStats)
+    
+    // Save test to localStorage history
+    const testHistory = JSON.parse(localStorage.getItem('codetype_test_history') || '[]')
+    testHistory.push({
+      id: Date.now(),
+      timestamp: new Date().toISOString(),
+      wpm: results.wpm,
+      accuracy: results.accuracy,
+      timeElapsed: results.timeElapsed,
+      correctChars: results.correctChars,
+      incorrectChars: results.incorrectChars,
+      totalChars: results.totalChars,
+      language: results.language || 'javascript',
+      difficulty: results.difficulty || 'easy',
+      mode: results.mode || 'practice',
+      completed: results.completed || false,
+      charStats: results.charStats || [],
+      snippetId: results.snippetId || null
+    })
+    localStorage.setItem('codetype_test_history', JSON.stringify(testHistory))
+    
+    // Save to Supabase if user is logged in
+    if (currentUser) {
+      try {
+        // Save test result
+        await saveTestResult(currentUser.id, {
+          wpm: results.wpm,
+          accuracy: results.accuracy,
+          time_elapsed: results.timeElapsed,
+          correct_chars: results.correctChars,
+          incorrect_chars: results.incorrectChars,
+          total_chars: results.totalChars,
+          language: results.language || 'javascript',
+          difficulty: results.difficulty || 'easy',
+          mode: results.mode || 'practice',
+          completed: results.completed || false,
+          char_stats: results.charStats || [],
+          snippet_id: results.snippetId || null
+        })
+        
+        // Update user stats in Supabase
+        await updateUserStats(currentUser.id, {
+          total_races: newStats.totalRaces,
+          total_words: newStats.totalWords,
+          total_time: newStats.totalTime,
+          perfect_races: newStats.perfectRaces,
+          last_race_date: today
+        })
+        
+        // Update user profile (XP, level, best scores)
+        await updateAuthUserStats({
+          xp: newTotalPoints,
+          level: newLevel,
+          stats: {
+            avgWpm: newStats.bestWPM,
+            avgAccuracy: newStats.bestAccuracy
+          }
+        })
+        
+        // Unlock achievements in Supabase
+        for (const achievement of newAchievements) {
+          await unlockAchievement(currentUser.id, achievement)
+        }
+      } catch (error) {
+        console.error('Error saving to Supabase:', error)
+      }
+    }
     
     return {
       earnedPoints,
       newTotalPoints,
-      level: calculateLevel(newTotalPoints),
+      level: newLevel,
       newAchievements
     }
-  }
+  }, [totalPoints, stats, currentUser, updateAuthUserStats])
 
   const checkAchievements = (newStats, oldStats) => {
     const achievements = []
@@ -268,7 +296,7 @@ export const PointsProvider = ({ children }) => {
     return achievements
   }
 
-  const resetProgress = () => {
+  const resetProgress = async () => {
     setTotalPoints(0)
     setStats({
       totalRaces: 0,
@@ -283,10 +311,9 @@ export const PointsProvider = ({ children }) => {
     })
     
     if (currentUser) {
-      const userPointsKey = `${POINTS_STORAGE_KEY}_${currentUser.id}`
-      const userStatsKey = `${STATS_STORAGE_KEY}_${currentUser.id}`
-      localStorage.removeItem(userPointsKey)
-      localStorage.removeItem(userStatsKey)
+      // Reset in Supabase would require deleting records
+      // For now, just reset local state
+      console.log('Reset progress for user:', currentUser.id)
     } else {
       localStorage.removeItem(POINTS_STORAGE_KEY)
       localStorage.removeItem(STATS_STORAGE_KEY)
